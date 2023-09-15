@@ -129,7 +129,6 @@ public static class FSerializationLogic {
 
 		// deserialize
 		foreach ((var field, var serData) in fieldsToDeserialize) {
-			// create specific generic TrySerialize for the field
 			MethodInfo generic_TryDeserializeValue = typeof(FSerializationLogic).GetMethod(nameof(TryDeserializeValue))!;
 			MethodInfo specific_TryDeserializeValue = generic_TryDeserializeValue.MakeGenericMethod(field.FieldType);
 
