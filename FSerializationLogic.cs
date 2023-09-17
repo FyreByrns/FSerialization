@@ -2,45 +2,9 @@
 
 namespace FSerialization;
 
-public static class FSerializationLogic {
+public static partial class FSerializationLogic {
 	static FSerializationLogic() {
 		DefaultSerializers.Init();
-	}
-
-	public static class TypeRegistry {
-		public static Dictionary<string, SerializerDeserializer> RegisteredSerializerDeserializers
-			= new();
-
-		public static bool SerializerDeserializerRegistered<T>() {
-			return RegisteredSerializerDeserializers.ContainsKey(typeof(T).ToString());
-		}
-
-		public static void RegisterSerializerDeserializer<T>(SerializerDeserializer<T> serializerDeserializer) {
-			if (!SerializerDeserializerRegistered<T>()) {
-				RegisteredSerializerDeserializers[typeof(T).ToString()] = serializerDeserializer;
-			}
-		}
-
-		public static Serializer<T>? SerializerFor<T>() {
-			if (SerializerDeserializerRegistered<T>()) {
-				if (RegisteredSerializerDeserializers[typeof(T).ToString()] is SerializerDeserializer<T> serder
-				 && serder.Serializer is Serializer<T> ser) {
-					return ser;
-				}
-			}
-
-			return null;
-		}
-		public static Deserializer<T>? DeserializerFor<T>() {
-			if (SerializerDeserializerRegistered<T>()) {
-				if (RegisteredSerializerDeserializers[typeof(T).ToString()] is SerializerDeserializer<T> serder
-				 && serder.Deserializer is Deserializer<T> der) {
-					return der;
-				}
-			}
-
-			return null;
-		}
 	}
 
 	/// <summary>
@@ -50,7 +14,7 @@ public static class FSerializationLogic {
 	/// <param name="objectToSerialize"></param>
 	/// <param name="result"></param>
 	/// <returns></returns>
-	public static bool TrySerialize<T>(T objectToSerialize, out byte[]? result) {
+	public static bool TrySerialize<T>(T objectToSerialize, out byte[] result) {
 		if (objectToSerialize is null) {
 			result = Array.Empty<byte>();
 			return false;
@@ -58,24 +22,45 @@ public static class FSerializationLogic {
 
 		List<byte> workingBytes = new();
 
-
 		// iterate over fields to serialize those
 		Type classType = typeof(T);
-		List<(FieldInfo field, SerializeAttribute serData)> fieldsToSerialize = new();
+		List<(FieldInfo field, SerAttribute serData)> fieldsToSerialize = new();
 
 		foreach (var field in classType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)) {
-			foreach (var attr in field.GetCustomAttributes<SerializeAttribute>()) {
-				if (attr is SerializeAttribute a && a is not DeserializeOnlyAttribute) {
-					fieldsToSerialize.Add((field, a));
-				}
+			foreach (var attr in field.GetCustomAttributes<SerAttribute>().OrderByDescending(x => x.FieldOrder)) {
+				fieldsToSerialize.Add((field, attr));
 			}
 		}
 
-		// get max data stream index
+		// analyze fields based on attributes
 		int maxLength = 0;
+		bool allowStatic = true;
+
 		foreach ((var field, var serData) in fieldsToSerialize) {
-			if (serData.DataStreamEnd > maxLength) {
-				maxLength = serData.DataStreamEnd;
+			// if the field is of static location and size ..
+			if (serData is SerializeAndDeserializeAttribute staticSerData) {
+				if (!allowStatic) {
+					result = Array.Empty<byte>();
+					return false;
+				}
+
+				// .. handle as normal
+				if (staticSerData.DataStreamEnd > maxLength) {
+					maxLength = staticSerData.DataStreamEnd;
+				}
+			}
+
+			// if the attribute is dynamically sized .. 
+			if (serData is SerializeAndDeserializeDynamicAttribute dynamicSerData) {
+				// .. disallow any static fields from now on
+				allowStatic = false;
+
+				// get length of field
+				int length = dynamicSerData.GetLength(field.GetValue(objectToSerialize));
+				dynamicSerData.DataStreamStart = maxLength;
+				dynamicSerData.DataStreamEnd = dynamicSerData.DataStreamStart + length + sizeof(int);
+
+				maxLength += dynamicSerData.DataLength;
 			}
 		}
 
@@ -86,7 +71,7 @@ public static class FSerializationLogic {
 		foreach ((var field, var serData) in fieldsToSerialize) {
 			// get instance field
 			object oValue = field.GetValue(objectToSerialize)!;
-			if(oValue is null) {
+			if (oValue is null) {
 				continue;
 			}
 
@@ -116,14 +101,20 @@ public static class FSerializationLogic {
 	public static bool TryDeserialize<T>(byte[] bytes, ref T? result) {
 		// iterate over fields to deserialize
 		Type classType = typeof(T);
-		List<(FieldInfo field, SerializeAttribute serData)> fieldsToDeserialize = new();
+		List<(FieldInfo field, SerAttribute serData)> fieldsToDeserialize = new();
 
+		int currentLength = 0;
 		foreach (var field in classType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)) {
-			foreach (var attr in field.GetCustomAttributes<SerializeAttribute>()) {
-				if (attr is DeserializeOnlyAttribute or SerializeAttribute) {
-					SerializeAttribute a = attr; ;
-					fieldsToDeserialize.Add((field, a));
+			foreach (var attr in field.GetCustomAttributes<SerAttribute>().OrderByDescending(x => x.FieldOrder)) {
+				// if the field is dynamic, figure out length and end
+				if (attr is SerializeAndDeserializeDynamicAttribute dyn) {
+					attr.DataStreamStart = currentLength;
+					TryDeserializeValue(bytes[attr.DataStreamStart..(attr.DataStreamStart + sizeof(int))], out int len);
+					attr.DataStreamEnd = attr.DataStreamStart + len * dyn.DataSize + sizeof(int);// + dyn.DataSize;
 				}
+
+				currentLength += attr.DataLength;
+				fieldsToDeserialize.Add((field, attr));
 			}
 		}
 

@@ -17,32 +17,4 @@ public static partial class DefaultSerializers {
 			specific_Register.Invoke(null, new[] { Activator.CreateInstance(type) });
 		}
 	}
-
-	class Int64 : SerializerDeserializer<long> {
-		class Ser : Serializer<long> {
-			public override byte[] Serialize(long value) {
-				return BitConverter.GetBytes(value);
-			}
-		}
-		class Der : Deserializer<long> {
-			public override long Deserialize(byte[] bytes) {
-				return BitConverter.ToInt64(bytes);
-			}
-		}
-		public Int64() : base(new Ser(), new Der()) { }
-	}
-
-	class Single : SerializerDeserializer<float> {
-		class Ser : Serializer<float> {
-			public override byte[] Serialize(float value) {
-				return BitConverter.GetBytes(value);
-			}
-		}
-		class Der : Deserializer<float> {
-			public override float Deserialize(byte[] bytes) {
-				return BitConverter.ToSingle(bytes);
-			}
-		}
-		public Single() : base(new Ser(), new Der()) { }
-	}
 }
